@@ -6,13 +6,18 @@ This is WIP.
 
 
 
-The aim of the project is to develop a fan controller module that can be applied to fans in existing appliances that otherwise have no speed control. The module is intended to be connected as a pass-through 
+The aim of the project is to develop a fan controller module that can be applied to fans in existing appliances that otherwise have no speed control. The module is intended to be connected as a pass-through between the fan and whatever it was originally plugged into.
+
+
+![2025-02-02-003017_807x529_scrot](https://github.com/user-attachments/assets/88d7b9f9-6a8a-42d4-b452-c5b36f362c51)
+![2025-02-02-003036_731x624_scrot](https://github.com/user-attachments/assets/22416faa-c719-4213-be94-a455bff83020)
+
 
 Features:
 
 - 5V - 24V input voltage range
 
-- Low side PWM switch controls any fan, with of without PWM pin
+- Low side PWM switch controls any DC fan, with of without PWM pin
 
 - About 12x13mm 2-layer PCB, no bottom side components
 
@@ -22,7 +27,7 @@ Features:
 
 - On-board or remote temperature sensor (DS18B20)
 
-- 2.54mm pitch input and output THT pads for soldering wires or connectors
+- 2.54mm pitch input and output THT pads for wires or connectors
 
 
 
