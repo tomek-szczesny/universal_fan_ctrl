@@ -13,29 +13,38 @@ The aim of the project is to develop a fan controller module that can be applied
 ![2025-02-02-003036_731x624_scrot](https://github.com/user-attachments/assets/22416faa-c719-4213-be94-a455bff83020)
 
 
-Features:
+## Features
 
-- 5V - 24V input voltage range
-
+- 4.5V - 30V input voltage range
 - Low side PWM switch controls any DC fan, with of without PWM pin
-
-- About 12x13mm 2-layer PCB, no bottom side components
-
+- 1A PWM switch
+- 11.6 x 13.6 mm 2-layer PCB, no bottom side components
 - Cheap BOM
-
 - BOM-configurable parameters
-
+- 2.54mm pitch input and output THT pads for wires or connectors
 - On-board or remote temperature sensor (DS18B20)
 
-- 2.54mm pitch input and output THT pads for wires or connectors
+## Operation
 
+- PWM fixed at 100Hz
+- Fan works at full speed in absence of the temperature sensor
+- Temperature probed at 10Hz
+- Digital low pass filter enahnces temperature measurement quality
+- Configurable Maximum temperature (MT) and Temperature ramp length (TR)
+  -   Fan stays off at T < (MT - TR)
+  -   Fan's PWM is mapped to (25% - 100%) range within (MT-TR) < T < MT range
+  -   Fan stays fully on for T > MT
+
+
+## Schematic
+![obraz](https://github.com/user-attachments/assets/9a808cd9-04ca-48b6-adaf-94e8674297b2)
 
 
 ## Configuration
 
 The microcontroller senses two ADC values on startup, which determine mode of operation. They can be easily changed by replacing two resistors on board.
 
-### Maximum temperature
+### Maximum temperature (MT)
 
 The temperature at which the fan works at the maximum speed. Resistor Rmt controls this parameter.
 
@@ -50,9 +59,9 @@ The temperature at which the fan works at the maximum speed. Resistor Rmt contro
 | 60C             | 3k6        |
 | 65C             | 1k or less |
 
-### Ramp length
+### Ramp length (TR)
 
-The temperature range within which the PWM signal is generated proportionally. This parameter is controlled by resistor Rtr.
+The temperature range that is mapped linearly to 25% - 100% PWM output This parameter is controlled by resistor Rtr.
 
 | Ramp Length | Rtr value   |
 | ----------- | ----------- |
