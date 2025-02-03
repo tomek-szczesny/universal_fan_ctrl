@@ -22,13 +22,13 @@ The aim of the project is to develop a fan controller module that can be applied
 - Cheap BOM
 - BOM-configurable parameters
 - 2.54mm pitch input and output THT pads for wires or connectors
-- On-board or remote temperature sensor (DS18B20)
+- On-board or remote temperature sensor (DS18B20), or AVR internal temp sensor
 
 ## Operation
 
-- PWM fixed at 100Hz
-- Fan works at full speed in absence of the temperature sensor
-- Temperature probed at 10Hz
+- PWM fixed at ~100Hz
+- In absence of DS18B20 temperature sensor, falls back to the internal AVR sensor
+- Temperature probed at ~5Hz
 - Digital low pass filter enahnces temperature measurement quality
 - Configurable Maximum temperature (MT) and Temperature ramp length (TR)
   -   Fan stays off at T < (MT - TR)
