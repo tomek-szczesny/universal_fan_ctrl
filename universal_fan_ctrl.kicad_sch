@@ -2280,6 +2280,17 @@
 		)
 		(uuid "7df8e4fa-3aee-4f17-a783-8f4a6c0b80d7")
 	)
+	(label "FAN_SW"
+		(at 78.74 87.63 0)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "850712b6-5a0c-4606-b010-1a5279c8f9a7")
+	)
 	(label "MT"
 		(at 40.64 132.08 180)
 		(fields_autoplaced yes)
