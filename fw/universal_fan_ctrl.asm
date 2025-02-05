@@ -3,9 +3,9 @@
 ; by Tomek Szczęsny 2025
 ; Build with avra
 
-;.nolist
+.nolist
 .include "tn202def.inc"
-;.list
+.list
 
 .equ CONSTANT_VALUE = 128
 
@@ -19,10 +19,12 @@
 .def tempmaxl = r18
 .def tempminh = r21			; 25% PWM temperature
 .def tempminl = r20
-.def tmph = r23				; Temporary values
-.def tmpl = r22
-.def tmp2h = r25			; Temporary values
-.def tmp2l = r24
+.def tmph = r25				; Temporary values
+.def tmpl = r24
+.def tmp2h = r23			; Temporary values
+.def tmp2l = r22
+
+; ------------------------------------------------------------ 
 
 .cseg
 .org 000000				; Interrupt Vector
@@ -37,16 +39,80 @@ Init:
 
 	ldi tmpl, CPU_CCP_IOREG_gc	; Unlocking Configuration Change Protection
 	out CPU_CCP, tmpl
-	ldi tmpl, 0b00010011		; Clock prescaler by 10 -> 2MHz operation
+	ldi tmpl, 0b00010011		; Clock prescaler dividing by 10 -> 2MHz operation
 	sts CLKCTRL_MCLKCTRLB, tmpl
 
+; ------------------------------------------------------------ 
+
+	; Sampling BOM settings set by resistor dividers
+
+	ldi tmpl, 0x05			; Enable ADC, 10 bit
+	sts ADC0_CTRLA, tmpl
+	ldi tmpl, 0x02			; Accumulation of 4 results
+	sts ADC0_CTRLB, tmpl
+	ldi tmpl, 0b01010000		; Reduced sampling cap, Vref=Vdd, clk divided by 2 (=1MHz)
+	sts ADC0_CTRLC, tmpl
+	ldi tmpl, 0b01000000		; 32 clock cycles init delay
+	sts ADC0_CTRLD, tmpl
+	ldi tmpl, 31			; Sampling period of 32 clk cycles (maximum)
+	sts ADC0_SAMPCTRL, tmpl
+	ldi tmpl, 0x02			; Selects PA2 input (MT value)
+	sts ADC0_MUXPOS, tmpl
+	call ADCpoll			; Discard the first sample
+	call ADCpoll			; Capture the value
+
+	lds tmph, ADC0_RESH		; Load the ADC result, raw setting on lower nibble
+	ldi tmpl, 80			; *16*5, shift and scale setting
+	mul tmph, tmpl
+	movw tempmaxl, r0
+	ldi tmpl, 0xE0			; Offset the value by +30C (30*16)
+	ldi tmph, 0x01
+	add tempmaxl, tmpl
+	adc tempmaxh, tmph
+
+	ldi tmpl, 0x00			; Disable Accumulation
+	sts ADC0_CTRLB, tmpl
+	ldi tmpl, 0x03			; Selects PA3 input (TR value)
+	sts ADC0_MUXPOS, tmpl
+	call ADCpoll			; Discard the first sample
+	call ADCpoll			; Capture the value
+
+	lds tmph, ADC0_RESH		; Load the ADC result, raw setting on low 2 bits
+	inc tmph
+	ldi tmpl, 80			; *16*5, shift and scale setting
+	mul tmph, tmpl
+	movw tempminl, tempmaxl		; Copy the max value and subtract TR
+	sub tempminl, r0
+	sbc tempminh, r1
+
+	sts ADC0_CTRLA, zero		; Disable ADC
+
+; ------------------------------------------------------------ 
+
+	; Set up the counters
+	; TCA will generate the PWM signal at WO1 pin, at 100Hz or so
+	; TCB will generate 5Hz interrupts for temperature acquisition
+
+	ldi tmpl, 0x07			; TCA enabled, divider by 8 (=250kHz) 
+	sts TCA0_SINGLE_CTRLA, tmpl
+	ldi tmpl, 0b00100011		; WO1 enabled, Single Slope PWM mode 
+	sts TCA0_SINGLE_CTRLB, tmpl
+	; TODO: Set this pin as output
+	ldi tmpl, 0xC3			; Set the period to 100Hz (2499) 
+	sts TCA0_SINGLE_TEMP, tmpl
+	ldi tmpl, 0x09
+	sts TCA0_SINGLE_PERH, tmpl
+	ldi tmpl, 0xFF			; Set the initial PWM to max 
+	sts TCA0_SINGLE_TEMP, tmpl
+	sts TCA0_SINGLE_CMP1BUF, tmpl
+	ldi tmpl, 0x04
+	sts TCA0_SINGLE_CTRLFSET, tmpl
 
 
-	;ldi tmpl,0b11100011		; Internal 2.56V, Left Adjust, ADC3
-	;out ADMUX,tmpl
-	;ldi tmpl,0b11110000		; Enable, free running, prescaler 2
-	;out ADCSRA,tmpl
-	
+	; TCB setup
+	; Source: CLK_TCA (250kHz)
+
+
 
 	;ldi tmpl, (1 << DDB3)		; B3 jest wyjściem (pin od OC2)
 	;out DDRB,tmpl
@@ -62,9 +128,9 @@ AVRTempSetup:				; Configuration of ADC for capturing AVR internal temperature
 	sts VREF_CTRLA, tmpl
 	ldi tmpl, 0x01			; Enable ADC
 	sts ADC0_CTRLA, tmpl
-	ldi tmpl, 0x04			; Accumulation of 16 results
+	ldi tmpl, 0x06			; Accumulation of 64 results
 	sts ADC0_CTRLB, tmpl
-	ldi tmpl, 0b01000000		; Reduced sampling cap, internal Vref, clk divided by 2 (=1MHz)
+	 ldi tmpl, 0b01000000		; Reduced sampling cap, internal Vref, clk divided by 2 (=1MHz)
 	sts ADC0_CTRLC, tmpl
 	ldi tmpl, 0b01000000		; 32 clock cycles init delay
 	sts ADC0_CTRLD, tmpl
@@ -78,27 +144,19 @@ AVRTempSetup:				; Configuration of ADC for capturing AVR internal temperature
 
 AVRTemp:				; Capture temperature from the AVR internal sensor
 
-	ldi tmpl, 0x01			; Start a conversion
-	sts ADC0_COMMAND, tmpl
-	
-	avrpoll:			; Wait for the conversion to complete
-	lds tmpl, ADC0_COMMAND		; when ADC_COMMAND is all zeroes
-	tst tmpl
-	breq avrpoll
+	call ADCpoll			
 
-	lds tmph, ADC0_RESH		; Load ADC results
-	lds tmpl, ADC0_RESL
-	ldi tmp2h, 0x08			; Dividing by 16 with appropriate rounding
-	add tmpl, tmp2h			; Because 16x accumulation has been enabled
-	adc tmph, zero
-	lsr tmph
-	ror tmpl
-	lsr tmph
-	ror tmpl
-	lsr tmph
-	ror tmpl
-	lsr tmph
-	ror tmpl
+	lds tmpl, ADC0_RESH		; Load ADC results, reversed reg order for a reason
+	lds tmph, ADC0_RESL
+	ldi tmp2h, 0x40			; Dividing by 64 with appropriate rounding
+	add tmph, tmp2h			; Because 64x accumulation has been enabled
+	adc tmpl, zero
+	rol tmph			; Rotate both registers, 2 positions 
+	rol tmpl
+	rol tmph
+	rol tmpl
+	rol tmph
+	andi tmph, 0x03
 
 	; Temperature readout compensation, as per datasheet instructions
 	; However it's not clear whether the expected input value is 8 or 10 bit
@@ -111,7 +169,7 @@ AVRTemp:				; Capture temperature from the AVR internal sensor
 	sub tmpl, tmp2l			; Applying offset
 	sbc tmph, tmp2h
 
-	ldi tmp2h, 0x08			; Dividing by 16 with appropriate rounding
+	adiw tmpl, 0x08			; Dividing by 16 with appropriate rounding
 	add tmpl, tmp2h
 	adc tmph, zero
 	lsr tmph
@@ -151,19 +209,14 @@ DSsanit:				; Sanitizing raw data from DS18B20 stored in tmp
 ; ------------------------------------------------------------------------------
 
 Facc:					; Filtered accumulation of tmp in temp
-					; Performs temp = (7/8)*temp + (1/8)*tmp
+					; Performs temp = (3/4)*temp + (1/4)*tmp
 					; Destroys tmp data
 
 	sub tmpl, templ			; tmp -= temp;
 	sbc tmph, temph
 
-	ldi tmp2l, 0x04			; Correct division rounding error
-	add tmpl, tmp2l
-	adc tmph, zero
-
-	asr tmph			; tmp /= 8; (Preserving the sign)
-	ror tmpl
-	asr tmph
+	adiw tmpl, 0x02			; Correct division rounding error
+	asr tmph			; tmp /= 4; (Preserving the sign)
 	ror tmpl
 	asr tmph
 	ror tmpl
@@ -172,3 +225,15 @@ Facc:					; Filtered accumulation of tmp in temp
 	ret
 
 ; ------------------------------------------------------------------------------
+
+ADCpoll:				; Wait for the ADC conversion to complete
+	push tmpl
+	ldi tmpl, 0x01			; Start a conversion
+	sts ADC0_COMMAND, tmpl
+	pollloop:
+	lds tmpl, ADC0_COMMAND		; when ADC_COMMAND is all zeroes
+	tst tmpl			; The conversion is complete
+	breq pollloop
+	pop tmpl
+	ret
+
