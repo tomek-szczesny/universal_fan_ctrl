@@ -12,17 +12,41 @@
 ; temperatures are stored as 16-bit signed integers
 ; representing temperature in units of (1/16) deg C
 
+.equ owp = 7				; One-Wire pin number on port A
+
 .def zero = r13				; Always zero
+.def ow = r12				; Bit corresponding to 1-Wire pin
 .def temph = r17			; Current temperature
 .def templ = r16
 .def tempmaxh = r19			; 100% PWM temperature
 .def tempmaxl = r18
 .def tempminh = r21			; 25% PWM temperature
 .def tempminl = r20
+.def slope = r14			; The slope constant for PWM calculation
 .def tmph = r25				; Temporary values
 .def tmpl = r24
 .def tmp2h = r23			; Temporary values
 .def tmp2l = r22
+; r30 and r31 are used as short term misc temps
+; by delay loops and macros
+
+.macro owh				; One wire goes high
+	sbi VPORTA_OUT, owp
+.endm
+.macro owl				; One wire goes low
+	cbi VPORTA_OUT, owp
+.endm
+.macro owz				; One wire goes hi-Z (input)
+	cbi VPORTA_DIR, owp
+.endm
+.macro owe				; One wire output enabled
+	sbi VPORTA_DIR, owp
+.endm
+.macro owr				; One wire read input to flag T
+	in r30, VPORTA_IN
+	bst r30, owp
+.endm
+
 
 ; ------------------------------------------------------------ 
 
@@ -30,12 +54,19 @@
 .org 000000				; Interrupt Vector
 	rjmp Init			; Reset
 
+.org TCB0_INT_vect			; The main loop at 5Hz
+	rjmp Loop
+
 .org INT_VECTORS_SIZE+1
 Init:
 	ldi tmpl, Low(RAMEND)		
 	out CPU_SPL, tmpl		; Stack pointer init
 
 	clr zero			; Populate "always zero" register
+	ldi tmpl, (1 << owp)		; Pin PA7 
+	mov ow, tmpl
+	;ldi tmpl, 0x08			; Enable PA7 pull-up when configured as input
+	;sts PORTA_PIN1CTRL, tmpl	; May overload the 1W bus with the existing pull-up
 
 	ldi tmpl, CPU_CCP_IOREG_gc	; Unlocking Configuration Change Protection
 	out CPU_CCP, tmpl
@@ -58,8 +89,8 @@ Init:
 	sts ADC0_SAMPCTRL, tmpl
 	ldi tmpl, 0x02			; Selects PA2 input (MT value)
 	sts ADC0_MUXPOS, tmpl
-	call ADCpoll			; Discard the first sample
-	call ADCpoll			; Capture the value
+	rcall ADCpoll			; Discard the first sample
+	rcall ADCpoll			; Capture the value
 
 	lds tmph, ADC0_RESH		; Load the ADC result, raw setting on lower nibble
 	ldi tmpl, 80			; *16*5, shift and scale setting
@@ -74,11 +105,17 @@ Init:
 	sts ADC0_CTRLB, tmpl
 	ldi tmpl, 0x03			; Selects PA3 input (TR value)
 	sts ADC0_MUXPOS, tmpl
-	call ADCpoll			; Discard the first sample
-	call ADCpoll			; Capture the value
+	rcall ADCpoll			; Discard the first sample
+	rcall ADCpoll			; Capture the value
 
 	lds tmph, ADC0_RESH		; Load the ADC result, raw setting on low 2 bits
-	inc tmph
+	ldi ZL, LOW(LUT_slope*2)	; Access LUT at the bottom of the code
+	ldi ZH, HIGH(LUT_slope*2)	; And read the slope coefficient
+	add ZL, tmph
+	adc ZH, zero
+	lpm slope, Z
+
+	inc tmph			; Calculate the low threshold (tempmin)
 	ldi tmpl, 80			; *16*5, shift and scale setting
 	mul tmph, tmpl
 	movw tempminl, tempmaxl		; Copy the max value and subtract TR
@@ -93,44 +130,42 @@ Init:
 	; TCA will generate the PWM signal at WO1 pin, at 100Hz or so
 	; TCB will generate 5Hz interrupts for temperature acquisition
 
+	; TCA setup
 	ldi tmpl, 0x07			; TCA enabled, divider by 8 (=250kHz) 
 	sts TCA0_SINGLE_CTRLA, tmpl
 	ldi tmpl, 0b00100011		; WO1 enabled, Single Slope PWM mode 
 	sts TCA0_SINGLE_CTRLB, tmpl
-	; TODO: Set this pin as output
+	ldi tmpl, 0x02			; Set PA1 as output
+	sts PORTA_DIRSET, tmpl
 	ldi tmpl, 0xC3			; Set the period to 100Hz (2499) 
 	sts TCA0_SINGLE_TEMP, tmpl
 	ldi tmpl, 0x09
 	sts TCA0_SINGLE_PERH, tmpl
-	ldi tmpl, 0xFF			; Set the initial PWM to max 
-	sts TCA0_SINGLE_TEMP, tmpl
-	sts TCA0_SINGLE_CMP1BUF, tmpl
 	ldi tmpl, 0x04
 	sts TCA0_SINGLE_CTRLFSET, tmpl
 
+	; TCB Setup
+	ldi tmpl, 0x07
+	sts TCB0_CTRLA, tmpl		; TCB enabled, 250kHz ckock from TCA_CLK
+	sts TCB0_CTRLB, zero		; Periodic interrupt mode
+	ldi tmpl, 0xC3			; Set 5Hz period (49999)
+	sts TCB0_CCMPH, tmpl
+	ldi tmpl, 0x4F
+	sts TCB0_CCMPL, tmpl
+	ldi tmpl, 0x01			; Enable Interrupt on Capture
+	sts TCB0_INTCTRL, tmpl
 
-	; TCB setup
-	; Source: CLK_TCA (250kHz)
+; ------------------------------------------------------------ 
 
+	; Configuration of ADC for capturing AVR internal temperature
 
-
-	;ldi tmpl, (1 << DDB3)		; B3 jest wyjściem (pin od OC2)
-	;out DDRB,tmpl
-
-Oblivion:
-
-	rjmp Oblivion
-
-; ------------------------------------------------------------------------------
-
-AVRTempSetup:				; Configuration of ADC for capturing AVR internal temperature
 	ldi tmpl, 0x10			; Vref = 1.1V
 	sts VREF_CTRLA, tmpl
 	ldi tmpl, 0x01			; Enable ADC
 	sts ADC0_CTRLA, tmpl
 	ldi tmpl, 0x06			; Accumulation of 64 results
 	sts ADC0_CTRLB, tmpl
-	 ldi tmpl, 0b01000000		; Reduced sampling cap, internal Vref, clk divided by 2 (=1MHz)
+	ldi tmpl, 0b01000000		; Reduced sampling cap, internal Vref, clk divided by 2 (=1MHz)
 	sts ADC0_CTRLC, tmpl
 	ldi tmpl, 0b01000000		; 32 clock cycles init delay
 	sts ADC0_CTRLD, tmpl
@@ -138,13 +173,92 @@ AVRTempSetup:				; Configuration of ADC for capturing AVR internal temperature
 	sts ADC0_SAMPCTRL, tmpl
 	ldi tmpl, 0x1E			; Selects temperature sensor as the ADC input
 	sts ADC0_MUXPOS, tmpl
+
+	rcall AVRtemp			; Set up the temp registers with an initial value
+	movw templ, tmpl
+	rcall PWMset
+
+; ------------------------------------------------------------------------------
+
+	sei				; Enable interrupts
+				
+	; Fall through to the Oblivion, awaiting interrupts
+
+; ------------------------------------------------------------------------------ 
+
+Oblivion:
+	rjmp Oblivion
+
+; ------------------------------------------------------------------------------
+
+Loop:					; The main loop with periodic temperature captures
+					; and PWM updates
+
+	; Trying to communicate with DS18B20
+	
+	owl				; Reset pulse
+	owe
+	rcall wait_500u
+	owz				; Delaying for DS' response
+	rcall wait_15u
+	rcall wait_15u
+	rcall wait_120u
+	owr				; Reading presence response (T flag)
+	brts Fallback			; If no response, fall back to AVR sensor
+	rcall wait_120u
+	rcall wait_120u
+	rcall wait_120u
+	; TODO: After initialization code	
+
+
+
+
+
+
+
+
+	rcall Facc			; Accumulate the result into temp registers
+	rcall PWMset			; Compute and update PWM setting
+	reti
+
+Fallback:				; Read AVR temperature sensor instead
+	rcall AVRtemp			; Get the AVR temperature to tmp registers
+	rcall Facc			; Accumulate the result into temp registers
+	rcall PWMset			; Compute and update PWM setting
+
+; ------------------------------------------------------------------------------
+
+PWMset:					; Compute and update PWM setting
+					; Destroys tmp
+	cp  templ, tempminl		; Check if temperature below the low threshold
+	cpc temph, tempminh
+	brsh pwm1			; If not, skip to the next stage
+	clr tmpl
+	clr tmph
+	rjmp pwmfinal
+
+	pwm1:
+	cp  tempmaxl, templ		; Check if temperature above the high threshold
+	cpc tempmaxh, temph
+	brsh pwm2			; If not, skip to the next stage
+	ser tmpl
+	ser tmph
+	rjmp pwmfinal
+
+	pwm2:				; The "linear region"
+	; TODO - the slope constant is ready	
+
+
+	pwmfinal:
+	sts TCA0_SINGLE_TEMP, tmpl	; Set the PWM 
+	sts TCA0_SINGLE_CMP1BUFH, tmph
 	ret
 
 ; ------------------------------------------------------------------------------
 
-AVRTemp:				; Capture temperature from the AVR internal sensor
+AVRtemp:				; Capture temperature from the AVR internal sensor
 
-	call ADCpoll			
+	rcall ADCpoll			
 
 	lds tmpl, ADC0_RESH		; Load ADC results, reversed reg order for a reason
 	lds tmph, ADC0_RESL
@@ -236,4 +350,55 @@ ADCpoll:				; Wait for the ADC conversion to complete
 	breq pollloop
 	pop tmpl
 	ret
+
+; ------------------------------------------------------------------------------
+
+; Delay loops generated with this tool:
+; http://darcy.rsgc.on.ca/ACES/TEI4M/AVRdelay.html
+; +6 clock cycles are the rcall/ret overhead
+
+wait_15u:
+	; Assembly code auto-generated
+	; by utility from Bret Mulvey
+	; Delay 24 cycles
+	; 12us at 2 MHz
+	ldi  r30, 8
+	L1:
+	dec  r30
+	brne L1
+	ret
+
+wait_120u:
+	; Assembly code auto-generated
+	; by utility from Bret Mulvey
+	; Delay 234 cycles
+	; 117us at 2 MHz
+
+	ldi  r30, 78
+	L2:
+	dec  r30
+	brne L2
+	ret
+
+wait_500u:
+	; Assembly code auto-generated
+	; by utility from Bret Mulvey
+	; Delay 954 cycles
+	; 477us at 2 MHz
+	ldi  r30, 2
+	ldi  r31, 73
+	L3:
+	dec  r31
+	brne L3
+	dec  r30
+	brne L3
+	nop
+	nop
+	ret
+
+; ------------------------------------------------------------------------------
+; Tiny LUT with slope values
+; because AVRs cannot do the division
+
+LUT_slope: .db 24, 12, 8, 6
 
