@@ -47,6 +47,38 @@
 	bst r30, owp
 .endm
 
+; Wait procedures, may destroy r0:r1 data
+
+.macro wait15u				; Actually 16u
+	lpm			; 3 cycles
+	mul zero, zero  	; 2 cycles
+.endm
+.macro wait60u				; Actually 60.8u (19 cycles)
+	push tmpl		; 1 cycle
+	ldi tmpl, 3		; 1 cycle
+	rcall delay		; 14 cycles in total
+	pop tmpl		; 2 cycles
+	nop			; 1 cycle
+.endm
+.macro wait120u				; Actually 121.6u (38 cycles)
+	push tmpl		; 1 cycle
+	ldi tmpl, 9		; 1 cycle
+	rcall delay		; 32 cycles in total
+	pop tmpl		; 2 cycles
+	mul zero, zero		; 2 cycles
+.endm
+.macro wait240u				; 75 cycles
+	push tmpl		; 1 cycle
+	ldi tmpl, 22		; 1 cycle
+	rcall delay		; 71 cycles in total
+	pop tmpl		; 2 cycles
+.endm
+.macro wait480u				; 150 cycles
+	push tmpl		; 1 cycle
+	ldi tmpl, 47		; 1 cycle
+	rcall delay		; 146 cycles in total
+	pop tmpl		; 2 cycles
+.endm
 
 ; ------------------------------------------------------------ 
 
@@ -70,7 +102,7 @@ Init:
 
 	ldi tmpl, CPU_CCP_IOREG_gc	; Unlocking Configuration Change Protection
 	out CPU_CCP, tmpl
-	ldi tmpl, 0b00010011		; Clock prescaler dividing by 10 -> 2MHz operation
+	ldi tmpl, 0b00011111		; Clock prescaler dividing by 64 -> 312.5kHz (3.2us) operation
 	sts CLKCTRL_MCLKCTRLB, tmpl
 
 ; ------------------------------------------------------------ 
@@ -81,7 +113,7 @@ Init:
 	sts ADC0_CTRLA, tmpl
 	ldi tmpl, 0x02			; Accumulation of 4 results
 	sts ADC0_CTRLB, tmpl
-	ldi tmpl, 0b01010000		; Reduced sampling cap, Vref=Vdd, clk divided by 2 (=1MHz)
+	ldi tmpl, 0b01010000		; Reduced sampling cap, Vref=Vdd, clk divided by 2
 	sts ADC0_CTRLC, tmpl
 	ldi tmpl, 0b01000000		; 32 clock cycles init delay
 	sts ADC0_CTRLD, tmpl
@@ -116,11 +148,19 @@ Init:
 	lpm slope, Z
 
 	inc tmph			; Calculate the low threshold (tempmin)
-	ldi tmpl, 80			; *16*5, shift and scale setting
-	mul tmph, tmpl
-	movw tempminl, tempmaxl		; Copy the max value and subtract TR
-	sub tempminl, r0
-	sbc tempminh, r1
+	clr tempminh
+	ldi tempminl, 0x14		; 1.25C constant, to be multiplied by 2 (TR+1) times
+	ldi slope, 0x70			; 7*16 const, to be divided by 2 (TR+1) times
+	tempminloop:			; (TR+1) loop
+	lsl tempminl
+	rol tempminh
+	lsr slope
+	dec tmph
+	brne tempminloop
+	movw tmpl, tempmaxl		; Calculate tempmin = tempmax - dT
+	sub tmpl, tempminl
+	sbc tmph, tempminh
+	movw tempminl, tmpl		; move the result to tempmin
 
 	sts ADC0_CTRLA, zero		; Disable ADC
 
@@ -131,26 +171,24 @@ Init:
 	; TCB will generate 5Hz interrupts for temperature acquisition
 
 	; TCA setup
-	ldi tmpl, 0x07			; TCA enabled, divider by 8 (=250kHz) 
+	ldi tmpl, 0x01			; TCA enabled, divider by 1 (=312.5kHz) 
 	sts TCA0_SINGLE_CTRLA, tmpl
 	ldi tmpl, 0b00100011		; WO1 enabled, Single Slope PWM mode 
 	sts TCA0_SINGLE_CTRLB, tmpl
 	ldi tmpl, 0x02			; Set PA1 as output
 	sts PORTA_DIRSET, tmpl
-	ldi tmpl, 0xC3			; Set the period to 100Hz (2499) 
+	ldi tmpl, 0x35			; Set the period to 100Hz (3125) 
 	sts TCA0_SINGLE_TEMP, tmpl
-	ldi tmpl, 0x09
+	ldi tmpl, 0x0C
 	sts TCA0_SINGLE_PERH, tmpl
-	ldi tmpl, 0x04
-	sts TCA0_SINGLE_CTRLFSET, tmpl
 
 	; TCB Setup
 	ldi tmpl, 0x07
 	sts TCB0_CTRLA, tmpl		; TCB enabled, 250kHz ckock from TCA_CLK
 	sts TCB0_CTRLB, zero		; Periodic interrupt mode
-	ldi tmpl, 0xC3			; Set 5Hz period (49999)
+	ldi tmpl, 0xF4			; Set 5Hz period (62499)
 	sts TCB0_CCMPH, tmpl
-	ldi tmpl, 0x4F
+	ldi tmpl, 0x23
 	sts TCB0_CCMPL, tmpl
 	ldi tmpl, 0x01			; Enable Interrupt on Capture
 	sts TCB0_INTCTRL, tmpl
@@ -165,11 +203,11 @@ Init:
 	sts ADC0_CTRLA, tmpl
 	ldi tmpl, 0x06			; Accumulation of 64 results
 	sts ADC0_CTRLB, tmpl
-	ldi tmpl, 0b01000000		; Reduced sampling cap, internal Vref, clk divided by 2 (=1MHz)
+	ldi tmpl, 0b01000000		; Reduced sampling cap, internal Vref, clk divided by 2
 	sts ADC0_CTRLC, tmpl
-	ldi tmpl, 0b01000000		; 32 clock cycles init delay
+	ldi tmpl, 0b00100000		; 16 clock cycles init delay (min 5 at this clk rate)
 	sts ADC0_CTRLD, tmpl
-	ldi tmpl, 31			; Sampling period of 32 clk cycles (maximum)
+	ldi tmpl, 5			; Sampling period of 2+5 clk cycles
 	sts ADC0_SAMPCTRL, tmpl
 	ldi tmpl, 0x1E			; Selects temperature sensor as the ADC input
 	sts ADC0_MUXPOS, tmpl
@@ -252,6 +290,8 @@ PWMset:					; Compute and update PWM setting
 	pwmfinal:
 	sts TCA0_SINGLE_TEMP, tmpl	; Set the PWM 
 	sts TCA0_SINGLE_CMP1BUFH, tmph
+	ldi tmpl, 0x04			; Apply CMP1BUF
+	sts TCA0_SINGLE_CTRLFSET, tmpl
 	ret
 
 ; ------------------------------------------------------------------------------
@@ -353,48 +393,13 @@ ADCpoll:				; Wait for the ADC conversion to complete
 
 ; ------------------------------------------------------------------------------
 
-; Delay loops generated with this tool:
-; http://darcy.rsgc.on.ca/ACES/TEI4M/AVRdelay.html
-; +6 clock cycles are the rcall/ret overhead
-
-wait_15u:
-	; Assembly code auto-generated
-	; by utility from Bret Mulvey
-	; Delay 24 cycles
-	; 12us at 2 MHz
-	ldi  r30, 8
-	L1:
-	dec  r30
-	brne L1
-	ret
-
-wait_120u:
-	; Assembly code auto-generated
-	; by utility from Bret Mulvey
-	; Delay 234 cycles
-	; 117us at 2 MHz
-
-	ldi  r30, 78
-	L2:
-	dec  r30
-	brne L2
-	ret
-
-wait_500u:
-	; Assembly code auto-generated
-	; by utility from Bret Mulvey
-	; Delay 954 cycles
-	; 477us at 2 MHz
-	ldi  r30, 2
-	ldi  r31, 73
-	L3:
-	dec  r31
-	brne L3
-	dec  r30
-	brne L3
-	nop
-	nop
-	ret
+; Delay loop used by the delay macros
+; including rcall, it wastes (tmpl*3)+5 cycles
+; tmpl > 0!
+delay:
+	dec tmpl		; 1 cycle
+	brne delay		; 2 cycles (1 if not true)
+	ret			; 4 cycles
 
 ; ------------------------------------------------------------------------------
 ; Tiny LUT with slope values
