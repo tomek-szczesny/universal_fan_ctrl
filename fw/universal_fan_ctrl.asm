@@ -22,7 +22,7 @@
 .def tempmaxl = r18
 .def tempminh = r21			; 25% PWM temperature
 .def tempminl = r20
-.def slope = r14			; The slope constant for PWM calculation
+.def slope = r26			; The slope constant for PWM calculation
 .def tmph = r25				; Temporary values
 .def tmpl = r24
 .def tmp2h = r23			; Temporary values
@@ -30,24 +30,7 @@
 ; r30 and r31 are used as short term misc temps
 ; by delay loops and macros
 
-.macro owh				; One wire goes high
-	sbi VPORTA_OUT, owp
-.endm
-.macro owl				; One wire goes low
-	cbi VPORTA_OUT, owp
-.endm
-.macro owz				; One wire goes hi-Z (input)
-	cbi VPORTA_DIR, owp
-.endm
-.macro owe				; One wire output enabled
-	sbi VPORTA_DIR, owp
-.endm
-.macro owr				; One wire read input to flag T
-	in r30, VPORTA_IN
-	bst r30, owp
-.endm
-
-; Wait procedures, may destroy r0:r1 data
+; Wait macros,  may destroy r0:r1 data
 
 .macro wait15u				; Actually 16u
 	lpm			; 3 cycles
@@ -78,6 +61,46 @@
 	ldi tmpl, 47		; 1 cycle
 	rcall delay		; 146 cycles in total
 	pop tmpl		; 2 cycles
+.endm
+
+; One Wire macros, may destroy r30 data
+
+.macro owh				; One wire goes high
+	sbi VPORTA_OUT, owp
+.endm
+.macro owl				; One wire goes low
+	cbi VPORTA_OUT, owp
+.endm
+.macro owz				; One wire goes hi-Z (input)
+	cbi VPORTA_DIR, owp
+.endm
+.macro owe				; One wire output enabled
+	sbi VPORTA_DIR, owp
+.endm
+.macro owr				; One wire read input to flag T
+	in r30, VPORTA_IN
+	bst r30, owp
+.endm
+.macro owsz				; one wire send zero
+	owl
+	owe
+	wait60u
+	owz
+.endm
+.macro owso				; one wire send one
+	owl
+	owe
+	owz
+	wait60u
+.endm
+.macro owrd				; one wire read bit to flag T
+	owl
+	owe
+	owz
+	nop
+	nop
+	nop
+	owr
 .endm
 
 ; ------------------------------------------------------------ 
@@ -225,6 +248,7 @@ Init:
 ; ------------------------------------------------------------------------------ 
 
 Oblivion:
+	sei
 	rjmp Oblivion
 
 ; ------------------------------------------------------------------------------
@@ -232,21 +256,49 @@ Oblivion:
 Loop:					; The main loop with periodic temperature captures
 					; and PWM updates
 
+	cli				; Disable interrupts until this is done
+
 	; Trying to communicate with DS18B20
 	
 	owl				; Reset pulse
 	owe
-	rcall wait_500u
+	wait480u
+	wait15u
 	owz				; Delaying for DS' response
-	rcall wait_15u
-	rcall wait_15u
-	rcall wait_120u
+	wait60u				; the safe read window is 60-75us
+	nop
 	owr				; Reading presence response (T flag)
 	brts Fallback			; If no response, fall back to AVR sensor
-	rcall wait_120u
-	rcall wait_120u
-	rcall wait_120u
-	; TODO: After initialization code	
+	wait480u
+
+	ldi tmpl, 0xCC			; Send "Skip ROM" (we expect only one 1w device)	
+	rcall OWsendbyte
+	ldi tmpl, 0x4E			; Send "Write Scratchpad" (the third byte is config)	
+	rcall OWsendbyte
+	ldi tmpl, 0x00			; Send a dummy byte	
+	rcall OWsendbyte
+	ldi tmpl, 0x00			; Send a dummy byte	
+	rcall OWsendbyte
+	ldi tmpl, 0x3F			; Configuration byte 0x3F (10-bit result, conv. time 187.5ms)
+	rcall OWsendbyte
+
+	owl				; Reset pulse
+	owe
+	wait480u
+	wait15u
+	owz				; Delaying for DS' response
+	wait60u				; the safe read window is 60-75us
+	nop
+	owr				; Reading presence response (T flag)
+	brts Fallback			; If no response, fall back to AVR sensor
+	wait480u
+	
+	ldi tmpl, 0xCC			; Send "Skip ROM" (we expect only one 1w device)	
+	rcall OWsendbyte
+	ldi tmpl, 0x44			; Send "Convert Temperature"
+	rcall OWsendbyte
+
+	; TODO: iThe continuation
 
 
 
@@ -263,6 +315,7 @@ Fallback:				; Read AVR temperature sensor instead
 	rcall AVRtemp			; Get the AVR temperature to tmp registers
 	rcall Facc			; Accumulate the result into temp registers
 	rcall PWMset			; Compute and update PWM setting
+	reti
 
 ; ------------------------------------------------------------------------------
 
@@ -389,6 +442,27 @@ ADCpoll:				; Wait for the ADC conversion to complete
 	tst tmpl			; The conversion is complete
 	breq pollloop
 	pop tmpl
+	ret
+
+
+
+; ------------------------------------------------------------------------------
+
+OWsendbyte:				; Sends tmpl byte
+	push tmph
+	ldi tmph, 8
+	owz
+	owl
+	owsbloop:
+	owe
+	sbrc tmpl, 0			; Zero is the 60+us pull
+	owz				; Skip shortening the pull if zero
+	wait60u
+	owz
+	lsr tmpl			; Shift data right
+	dec tmph			
+	brne owsbloop			; Loop it
+	pop tmph
 	ret
 
 ; ------------------------------------------------------------------------------
