@@ -31,10 +31,22 @@
 .def tmp2h = r23			; Temporary values
 .def tmp2l = r22
 
+.macro wait12u
+	push tmpl		; 1 cycle
+	ldi tmpl, 1		; 1 cycle
+	rcall delay		; 8 cycles in total
+	pop tmpl		; 2 cycles
+.endm
 .macro wait15u
 	push tmpl		; 1 cycle
 	ldi tmpl, 2		; 1 cycle
 	rcall delay		; 11 cycles in total
+	pop tmpl		; 2 cycles
+.endm
+.macro wait45u
+	push tmpl		; 1 cycle
+	ldi tmpl, 12		; 1 cycle
+	rcall delay		; 41 cycles in total
 	pop tmpl		; 2 cycles
 .endm
 .macro wait60u
@@ -42,6 +54,13 @@
 	ldi tmpl, 17		; 1 cycle
 	rcall delay		; 56 cycles in total
 	pop tmpl		; 2 cycles
+.endm
+.macro wait67u
+	push tmpl		; 1 cycle
+	ldi tmpl, 19		; 1 cycle
+	rcall delay		; 62 cycles in total
+	pop tmpl		; 2 cycles
+	nop			; 1 cycle
 .endm
 .macro wait120u
 	push tmpl		; 1 cycle
@@ -114,6 +133,8 @@ Init:
 	out CPU_CCP, tmpl
 	ldi tmpl, 0b00000111		; Clock prescaler dividing by 16 -> 1MHz operation
 	sts CLKCTRL_MCLKCTRLB, tmpl
+	ldi tmpl, 0b00000001		; Enabling sleep mode "Idle"
+	sts SLPCTRL_CTRLA, tmpl
 
 ; ------------------------------------------------------------ 
 
@@ -235,66 +256,57 @@ Init:
 ; ------------------------------------------------------------------------------ 
 
 Oblivion:
-	sei
+	sleep
 	rjmp Oblivion
 
 ; ------------------------------------------------------------------------------
 
 Loop:					; The main loop with periodic temperature captures
 					; and PWM updates
+	; Goes like this:
+	; Collect the result of DS18 temp conversion
+	; - If not responsing, go to Fallback
+	; Configure DS18
+	; Launch DS18 conversion
+	; Set PWM
+	; Return, where it's doomed to sleep
+	; Launch a new conversion
 
-	cli				; Disable interrupts until this is done
-
-	; Trying to communicate with DS18B20
-	
-	owl				; Reset pulse
-	owe
-	wait480u
-	wait15u
-	owz				; Delaying for DS' response
-	wait60u				; the safe read window is 60-75us
-	nop
-	owr				; Reading presence response (T flag)
+	; Collect the result of DS18 temp conversion
+	rcall OWresetpulse
 	brts Fallback			; If no response, fall back to AVR sensor
-	wait480u
+
+	; TODO
+
+	andi tmph, 0b10000111		; Sanitizing raw data from DS18B20 stored in tmp
+	andi tmpl, 0b11111100		; For 10-bit readouts
+	rcall Facc			; Accumulate the result into temp registers
+
+	; Configure DS18
+	rcall OWresetpulse
+	brts Fallback			; If no response, fall back to AVR sensor
 
 	ldi tmpl, 0xCC			; Send "Skip ROM" (we expect only one 1w device)	
 	rcall OWsendbyte
 	ldi tmpl, 0x4E			; Send "Write Scratchpad" (the third byte is config)	
 	rcall OWsendbyte
-	ldi tmpl, 0x00			; Send a dummy byte	
+	ldi tmpl, 0x00			; Send two dummy bytes	
 	rcall OWsendbyte
-	ldi tmpl, 0x00			; Send a dummy byte	
 	rcall OWsendbyte
 	ldi tmpl, 0x3F			; Configuration byte 0x3F (10-bit result, conv. time 187.5ms)
 	rcall OWsendbyte
 
-	owl				; Reset pulse
-	owe
-	wait480u
-	wait15u
-	owz				; Delaying for DS' response
-	wait60u				; the safe read window is 60-75us
-	nop
-	owr				; Reading presence response (T flag)
+	; Launch DS18 conversion
+	rcall OWresetpulse
 	brts Fallback			; If no response, fall back to AVR sensor
-	wait480u
 	
 	ldi tmpl, 0xCC			; Send "Skip ROM" (we expect only one 1w device)	
 	rcall OWsendbyte
 	ldi tmpl, 0x44			; Send "Convert Temperature"
 	rcall OWsendbyte
 
-	; TODO: iThe continuation
+	; We assume the conversion should be complete at the next 5Hz cycle
 
-
-
-
-
-
-
-
-	rcall Facc			; Accumulate the result into temp registers
 	rcall PWMset			; Compute and update PWM setting
 	reti
 
@@ -381,8 +393,8 @@ AVRtemp:				; Capture temperature from the AVR internal sensor
 	sbc tmph, tmp2h
 
 	adiw tmpl, 0x08			; Dividing by 16 with appropriate rounding
-	add tmpl, tmp2h
-	adc tmph, zero
+	;add tmpl, tmp2h
+	;adc tmph, zero			; WTF is this?
 	lsr tmph
 	ror tmpl
 	lsr tmph
@@ -407,14 +419,6 @@ AVRtemp:				; Capture temperature from the AVR internal sensor
 	subi tmpl, 0b00010010		; Converting to deg C
 	sbci tmph, 0b00010001
 
-	ret
-
-; ------------------------------------------------------------------------------
-
-
-DSsanit:				; Sanitizing raw data from DS18B20 stored in tmp
-	andi tmph, 0b10000111
-	andi tmpl, 0b11111100		; For 10-bit readouts
 	ret
 
 ; ------------------------------------------------------------------------------
@@ -448,8 +452,6 @@ ADCpoll:				; Wait for the ADC conversion to complete
 	pop tmpl
 	ret
 
-
-
 ; ------------------------------------------------------------------------------
 
 OWsendbyte:				; Sends tmpl byte
@@ -471,6 +473,21 @@ OWsendbyte:				; Sends tmpl byte
 
 ; ------------------------------------------------------------------------------
 
+OWresetpulse:				; Sends a reset pulse
+	owl				; returns "1" in T register if no response
+	owe
+	wait480u
+	wait15u
+	owz				; Delaying for DS' response
+	wait67u				; the safe read window is 60-75us
+	owr				; Reading presence response (T flag)
+	brtc PC + 2			; If there is a response, skip early return
+	ret
+	wait480u
+	ret
+
+; ------------------------------------------------------------------------------
+
 ; Delay loop used by the delay macros
 ; including rcall, it wastes (tmpl*3)+5 cycles
 ; tmpl > 0!
@@ -480,8 +497,4 @@ delay:
 	ret			; 4 cycles
 
 ; ------------------------------------------------------------------------------
-; Tiny LUT with slope values
-; because AVRs cannot do the division
-
-LUT_slope: .db 24, 12, 8, 6
 
