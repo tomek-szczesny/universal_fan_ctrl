@@ -3,6 +3,9 @@
 ; by Tomek Szczęsny 2025
 ; Build with avra
 
+; Fuse bits:
+; - Set osc to 16MHz
+
 .nolist
 .include "tn202def.inc"
 .list
@@ -27,39 +30,35 @@
 .def tmpl = r24
 .def tmp2h = r23			; Temporary values
 .def tmp2l = r22
-; r30 and r31 are used as short term misc temps
-; by delay loops and macros
 
-; Wait macros,  may destroy r0:r1 data
-
-.macro wait15u				; Actually 16u
-	lpm			; 3 cycles
-	mul zero, zero  	; 2 cycles
-.endm
-.macro wait60u				; Actually 60.8u (19 cycles)
+.macro wait15u
 	push tmpl		; 1 cycle
-	ldi tmpl, 3		; 1 cycle
-	rcall delay		; 14 cycles in total
-	pop tmpl		; 2 cycles
-	nop			; 1 cycle
-.endm
-.macro wait120u				; Actually 121.6u (38 cycles)
-	push tmpl		; 1 cycle
-	ldi tmpl, 9		; 1 cycle
-	rcall delay		; 32 cycles in total
-	pop tmpl		; 2 cycles
-	mul zero, zero		; 2 cycles
-.endm
-.macro wait240u				; 75 cycles
-	push tmpl		; 1 cycle
-	ldi tmpl, 22		; 1 cycle
-	rcall delay		; 71 cycles in total
+	ldi tmpl, 2		; 1 cycle
+	rcall delay		; 11 cycles in total
 	pop tmpl		; 2 cycles
 .endm
-.macro wait480u				; 150 cycles
+.macro wait60u
 	push tmpl		; 1 cycle
-	ldi tmpl, 47		; 1 cycle
-	rcall delay		; 146 cycles in total
+	ldi tmpl, 17		; 1 cycle
+	rcall delay		; 56 cycles in total
+	pop tmpl		; 2 cycles
+.endm
+.macro wait120u
+	push tmpl		; 1 cycle
+	ldi tmpl, 37		; 1 cycle
+	rcall delay		; 116 cycles in total
+	pop tmpl		; 2 cycles
+.endm
+.macro wait240u
+	push tmpl		; 1 cycle
+	ldi tmpl, 77		; 1 cycle
+	rcall delay		; 236 cycles in total
+	pop tmpl		; 2 cycles
+.endm
+.macro wait480u
+	push tmpl		; 1 cycle
+	ldi tmpl, 157		; 1 cycle
+	rcall delay		; 476 cycles in total
 	pop tmpl		; 2 cycles
 .endm
 
@@ -80,18 +79,6 @@
 .macro owr				; One wire read input to flag T
 	in r30, VPORTA_IN
 	bst r30, owp
-.endm
-.macro owsz				; one wire send zero
-	owl
-	owe
-	wait60u
-	owz
-.endm
-.macro owso				; one wire send one
-	owl
-	owe
-	owz
-	wait60u
 .endm
 .macro owrd				; one wire read bit to flag T
 	owl
@@ -125,7 +112,7 @@ Init:
 
 	ldi tmpl, CPU_CCP_IOREG_gc	; Unlocking Configuration Change Protection
 	out CPU_CCP, tmpl
-	ldi tmpl, 0b00011111		; Clock prescaler dividing by 64 -> 312.5kHz (3.2us) operation
+	ldi tmpl, 0b00000111		; Clock prescaler dividing by 16 -> 1MHz operation
 	sts CLKCTRL_MCLKCTRLB, tmpl
 
 ; ------------------------------------------------------------ 
@@ -173,7 +160,7 @@ Init:
 	inc tmph			; Calculate the low threshold (tempmin)
 	clr tempminh
 	ldi tempminl, 0x14		; 1.25C constant, to be multiplied by 2 (TR+1) times
-	ldi slope, 0x70			; 7*16 const, to be divided by 2 (TR+1) times
+	ldi slope, 0x60			; 6*16 const, to be divided by 2 (TR+1) times
 	tempminloop:			; (TR+1) loop
 	lsl tempminl
 	rol tempminh
@@ -194,24 +181,24 @@ Init:
 	; TCB will generate 5Hz interrupts for temperature acquisition
 
 	; TCA setup
-	ldi tmpl, 0x01			; TCA enabled, divider by 1 (=312.5kHz) 
+	ldi tmpl, 0x05			; TCA enabled, divider by 4 (=250kHz) 
 	sts TCA0_SINGLE_CTRLA, tmpl
 	ldi tmpl, 0b00100011		; WO1 enabled, Single Slope PWM mode 
 	sts TCA0_SINGLE_CTRLB, tmpl
 	ldi tmpl, 0x02			; Set PA1 as output
 	sts PORTA_DIRSET, tmpl
-	ldi tmpl, 0x35			; Set the period to 100Hz (3125) 
+	ldi tmpl, 0xC3			; Set the period to 100Hz (2499) 
 	sts TCA0_SINGLE_TEMP, tmpl
-	ldi tmpl, 0x0C
+	ldi tmpl, 0x09
 	sts TCA0_SINGLE_PERH, tmpl
 
 	; TCB Setup
 	ldi tmpl, 0x07
 	sts TCB0_CTRLA, tmpl		; TCB enabled, 250kHz ckock from TCA_CLK
 	sts TCB0_CTRLB, zero		; Periodic interrupt mode
-	ldi tmpl, 0xF4			; Set 5Hz period (62499)
+	ldi tmpl, 0xC3			; Set 5Hz period (49999)
 	sts TCB0_CCMPH, tmpl
-	ldi tmpl, 0x23
+	ldi tmpl, 0x4F
 	sts TCB0_CCMPL, tmpl
 	ldi tmpl, 0x01			; Enable Interrupt on Capture
 	sts TCB0_INTCTRL, tmpl
@@ -228,9 +215,9 @@ Init:
 	sts ADC0_CTRLB, tmpl
 	ldi tmpl, 0b01000000		; Reduced sampling cap, internal Vref, clk divided by 2
 	sts ADC0_CTRLC, tmpl
-	ldi tmpl, 0b00100000		; 16 clock cycles init delay (min 5 at this clk rate)
+	ldi tmpl, 0b00100000		; 16 clock cycles init delay (min 16 at this clk rate)
 	sts ADC0_CTRLD, tmpl
-	ldi tmpl, 5			; Sampling period of 2+5 clk cycles
+	ldi tmpl, 14			; Sampling period of 2+14 clk cycles
 	sts ADC0_SAMPCTRL, tmpl
 	ldi tmpl, 0x1E			; Selects temperature sensor as the ADC input
 	sts ADC0_MUXPOS, tmpl
