@@ -308,6 +308,11 @@ Fallback:				; Read AVR temperature sensor instead
 
 PWMset:					; Compute and update PWM setting
 					; Destroys tmp
+	; TCA period is 2499 ticks
+	; Input value is within 0-319 range
+	; let's set CMP = 579 + (6*IN)
+	; This gives 23.16% minimum PWM
+
 	cp  templ, tempminl		; Check if temperature below the low threshold
 	cpc temph, tempminh
 	brsh pwm1			; If not, skip to the next stage
@@ -324,8 +329,20 @@ PWMset:					; Compute and update PWM setting
 	rjmp pwmfinal
 
 	pwm2:				; The "linear region"
-	; TODO - the slope constant is ready	
+	; temp is at most 9 bits long
+	; slope fits into 7 bits
+	; The result is 16 bits long tops
+	movw tmpl, templ		; Calculate the difference against the tempmin
+	sub tmpl, tempminl
+	sbc tmph, tempminh
+	mul tmpl, slope			; Multiply it by slope (scale depending on TR)
+	sbrc tmph, 0			; Multiply the 9th temp bit by slope
+	add r1, slope
 
+	ldi tmpl, 0x44			; Add a constant 580
+	ldi tmph, 0x02			; And move result to tmp
+	add tmpl, r0
+	adc tmph, r1
 
 	pwmfinal:
 	sts TCA0_SINGLE_TEMP, tmpl	; Set the PWM 
