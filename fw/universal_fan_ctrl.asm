@@ -99,15 +99,6 @@
 	in r30, VPORTA_IN
 	bst r30, owp
 .endm
-.macro owrd				; one wire read bit to flag T
-	owl
-	owe
-	owz
-	nop
-	nop
-	nop
-	owr
-.endm
 
 ; ------------------------------------------------------------ 
 
@@ -172,12 +163,6 @@ Init:
 	rcall ADCpoll			; Capture the value
 
 	lds tmph, ADC0_RESH		; Load the ADC result, raw setting on low 2 bits
-	ldi ZL, LOW(LUT_slope*2)	; Access LUT at the bottom of the code
-	ldi ZH, HIGH(LUT_slope*2)	; And read the slope coefficient
-	add ZL, tmph
-	adc ZH, zero
-	lpm slope, Z
-
 	inc tmph			; Calculate the low threshold (tempmin)
 	clr tempminh
 	ldi tempminl, 0x14		; 1.25C constant, to be multiplied by 2 (TR+1) times
@@ -275,8 +260,16 @@ Loop:					; The main loop with periodic temperature captures
 	; Collect the result of DS18 temp conversion
 	rcall OWresetpulse
 	brts Fallback			; If no response, fall back to AVR sensor
+	ldi tmpl, 0xCC			; Send "Skip ROM" (we expect only one 1w device)	
+	rcall OWsendbyte
+	ldi tmpl, 0xBE			; Send "Read Scratchpad"
+	rcall OWsendbyte
 
-	; TODO
+	rcall OWreadbyte		; the first byte read is the lower half
+	mov tmp2l, tmpl
+	rcall OWreadbyte
+	mov tmph, tmpl
+	mov tmpl, tmp2l
 
 	andi tmph, 0b10000111		; Sanitizing raw data from DS18B20 stored in tmp
 	andi tmpl, 0b11111100		; For 10-bit readouts
@@ -468,6 +461,26 @@ OWsendbyte:				; Sends tmpl byte
 	lsr tmpl			; Shift data right
 	dec tmph			
 	brne owsbloop			; Loop it
+	pop tmph
+	ret
+
+; ------------------------------------------------------------------------------
+
+OWreadbyte:				; Reads a byte to tmpl
+	push tmph
+	ldi tmph, 8
+	owz
+	owl
+	owrbloop:
+	owe				; Pull low for 2us (>1us)
+	lsl tmpl			; shift register 
+	owz
+	wait12u
+	owr
+	bld tmpl, 0			; Store received bit in tmpl
+	wait60u
+	dec tmph			
+	brne owrbloop			; Loop it
 	pop tmph
 	ret
 
