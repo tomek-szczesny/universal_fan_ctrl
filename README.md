@@ -2,43 +2,32 @@
 
 An autonomous, temperature dependent fan controller
 
-This is WIP. 
-
-
-
 The aim of the project is to develop a fan controller module that can be applied to fans in existing appliances that otherwise have no speed control. The module is intended to be connected as a pass-through between the fan and whatever it was originally plugged into.
 
-
-![2025-02-02-003017_807x529_scrot](https://github.com/user-attachments/assets/88d7b9f9-6a8a-42d4-b452-c5b36f362c51)
-![2025-02-02-003036_731x624_scrot](https://github.com/user-attachments/assets/22416faa-c719-4213-be94-a455bff83020)
+![2025-02-15-212940_507x466_scrot](https://github.com/user-attachments/assets/fdbef686-8e25-4c24-93b2-18126f05e1e9)
+![2025-02-15-212955_443x396_scrot](https://github.com/user-attachments/assets/53955208-b904-4a1b-bdb2-2d52df2c16a6)
 
 
 ## Features
 
 - 4.5V - 30V input voltage range
-- Low side PWM switch controls any DC fan, with of without PWM pin
-- 1A PWM switch
+- Low side 1A PWM switch controls any DC fan, with of without PWM pin
 - 11.6 x 13.6 mm 2-layer PCB, no bottom side components
-- Cheap BOM
+- Cheap BOM with hand-solderable 0603 passives
 - BOM-configurable parameters
 - 2.54mm pitch input and output THT pads for wires or connectors
-- On-board or remote temperature sensor (DS18B20), or AVR internal temp sensor
+- On-board or remote temperature sensor (DS18B20), or AVR internal sensor
 
 ## Operation
 
-- PWM fixed at ~100Hz
+- PWM fixed at 100Hz
 - In absence of DS18B20 temperature sensor, falls back to the internal AVR sensor
-- Temperature probed at ~5Hz
-- Digital low pass filter enahnces temperature measurement quality
+- Temperature probed at 5Hz
+- Digital low pass filters reduce measurement noise
 - Configurable Maximum temperature (MT) and Temperature ramp length (TR)
-  -   Fan stays off at T < (MT - TR)
-  -   Fan's PWM is mapped to (25% - 100%) range within (MT-TR) < T < MT range
+  -   Fan stays off at T < (MT-TR)
+  -   Fan's PWM is mapped to (23.2% - 100%) range within (MT-TR) < T < MT range
   -   Fan stays fully on at T > MT
-
-
-## Schematic
-![obraz](https://github.com/user-attachments/assets/9a808cd9-04ca-48b6-adaf-94e8674297b2)
-
 
 ## Configuration
 
@@ -61,7 +50,7 @@ The temperature at which the fan works at the maximum speed. Resistor Rmt contro
 
 ### Ramp length (TR)
 
-The temperature range that is mapped linearly to 25% - 100% PWM output This parameter is controlled by resistor Rtr.
+The temperature range that is mapped linearly to 23.2% - 100% PWM output This parameter is controlled by resistor Rtr.
 
 | Ramp Length | Rtr value   |
 | ----------- | ----------- |
@@ -69,3 +58,6 @@ The temperature range that is mapped linearly to 25% - 100% PWM output This para
 | 5C          | 33k         |
 | 10C         | 12k         |
 | 20C         | 2k7 or less |
+
+## Schematic
+![2025-02-15-213155_895x945_scrot](https://github.com/user-attachments/assets/1c5f35a5-b682-40d6-8058-b1494befdc60)
