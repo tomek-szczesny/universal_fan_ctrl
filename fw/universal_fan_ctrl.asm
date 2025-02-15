@@ -10,75 +10,55 @@
 .include "tn202def.inc"
 .list
 
-.equ CONSTANT_VALUE = 128
-
 ; temperatures are stored as 16-bit signed integers
 ; representing temperature in units of (1/16) deg C
+; [t11 t10 t9 t8 t7 t6 t5 t4] : [t3 t2 t1 t0 t-1 t-2 t-3 t-4]
 
 .equ owp = 7				; One-Wire pin number on port A
 
-.def zero = r13				; Always zero
-.def ow = r12				; Bit corresponding to 1-Wire pin
+.def arg1 = r25				; procedure io
+.def arg0 = r24
+.def tempminh = r23			; 25% PWM temperature
+.def tempminl = r22
+.def tmph = r21				; Temporary values
+.def tmpl = r20
+.def slope = r19			; The slope constant for PWM calculation
 .def temph = r17			; Current temperature
 .def templ = r16
-.def tempmaxh = r19			; 100% PWM temperature
-.def tempmaxl = r18
-.def tempminh = r21			; 25% PWM temperature
-.def tempminl = r20
-.def slope = r26			; The slope constant for PWM calculation
-.def tmph = r25				; Temporary values
-.def tmpl = r24
-.def tmp2h = r23			; Temporary values
-.def tmp2l = r22
+.def tempmaxh = r9			; 100% PWM temperature
+.def tempmaxl = r8
+.def zero = r7				; Always zero
 
 .macro wait12u
-	push tmpl		; 1 cycle
-	ldi tmpl, 1		; 1 cycle
+	push arg0		; 1 cycle
+	ldi arg0, 1		; 1 cycle
 	rcall delay		; 8 cycles in total
-	pop tmpl		; 2 cycles
+	pop arg0		; 2 cycles
 .endm
 .macro wait15u
-	push tmpl		; 1 cycle
-	ldi tmpl, 2		; 1 cycle
+	push arg0		; 1 cycle
+	ldi arg0, 2		; 1 cycle
 	rcall delay		; 11 cycles in total
-	pop tmpl		; 2 cycles
-.endm
-.macro wait45u
-	push tmpl		; 1 cycle
-	ldi tmpl, 12		; 1 cycle
-	rcall delay		; 41 cycles in total
-	pop tmpl		; 2 cycles
+	pop arg0		; 2 cycles
 .endm
 .macro wait60u
-	push tmpl		; 1 cycle
-	ldi tmpl, 17		; 1 cycle
+	push arg0		; 1 cycle
+	ldi arg0, 17		; 1 cycle
 	rcall delay		; 56 cycles in total
-	pop tmpl		; 2 cycles
+	pop arg0		; 2 cycles
 .endm
 .macro wait67u
-	push tmpl		; 1 cycle
-	ldi tmpl, 19		; 1 cycle
+	push arg0		; 1 cycle
+	ldi arg0, 19		; 1 cycle
 	rcall delay		; 62 cycles in total
-	pop tmpl		; 2 cycles
+	pop arg0		; 2 cycles
 	nop			; 1 cycle
 .endm
-.macro wait120u
-	push tmpl		; 1 cycle
-	ldi tmpl, 37		; 1 cycle
-	rcall delay		; 116 cycles in total
-	pop tmpl		; 2 cycles
-.endm
-.macro wait240u
-	push tmpl		; 1 cycle
-	ldi tmpl, 77		; 1 cycle
-	rcall delay		; 236 cycles in total
-	pop tmpl		; 2 cycles
-.endm
 .macro wait480u
-	push tmpl		; 1 cycle
-	ldi tmpl, 157		; 1 cycle
+	push arg0		; 1 cycle
+	ldi arg0, 157		; 1 cycle
 	rcall delay		; 476 cycles in total
-	pop tmpl		; 2 cycles
+	pop arg0		; 2 cycles
 .endm
 
 ; One Wire macros, may destroy r30 data
@@ -115,10 +95,6 @@ Init:
 	out CPU_SPL, tmpl		; Stack pointer init
 
 	clr zero			; Populate "always zero" register
-	ldi tmpl, (1 << owp)		; Pin PA7 
-	mov ow, tmpl
-	;ldi tmpl, 0x08			; Enable PA7 pull-up when configured as input
-	;sts PORTA_PIN1CTRL, tmpl	; May overload the 1W bus with the existing pull-up
 
 	ldi tmpl, CPU_CCP_IOREG_gc	; Unlocking Configuration Change Protection
 	out CPU_CCP, tmpl
@@ -143,7 +119,6 @@ Init:
 	sts ADC0_SAMPCTRL, tmpl
 	ldi tmpl, 0x02			; Selects PA2 input (MT value)
 	sts ADC0_MUXPOS, tmpl
-	rcall ADCpoll			; Discard the first sample
 	rcall ADCpoll			; Capture the value
 
 	lds tmph, ADC0_RESH		; Load the ADC result, raw setting on lower nibble
@@ -159,7 +134,6 @@ Init:
 	sts ADC0_CTRLB, tmpl
 	ldi tmpl, 0x03			; Selects PA3 input (TR value)
 	sts ADC0_MUXPOS, tmpl
-	rcall ADCpoll			; Discard the first sample
 	rcall ADCpoll			; Capture the value
 
 	lds tmph, ADC0_RESH		; Load the ADC result, raw setting on low 2 bits
@@ -260,46 +234,47 @@ Loop:					; The main loop with periodic temperature captures
 	; Collect the result of DS18 temp conversion
 	rcall OWresetpulse
 	brts Fallback			; If no response, fall back to AVR sensor
-	ldi tmpl, 0xCC			; Send "Skip ROM" (we expect only one 1w device)	
+	ldi arg0, 0xCC			; Send "Skip ROM" (we expect only one 1w device)	
 	rcall OWsendbyte
-	ldi tmpl, 0xBE			; Send "Read Scratchpad"
+	ldi arg0, 0xBE			; Send "Read Scratchpad"
 	rcall OWsendbyte
 
 	rcall OWreadbyte		; the first byte read is the lower half
-	mov tmp2l, tmpl
+	push arg0			; We store these results for later
 	rcall OWreadbyte
-	mov tmph, tmpl
-	mov tmpl, tmp2l
-
-	andi tmph, 0b10000111		; Sanitizing raw data from DS18B20 stored in tmp
-	andi tmpl, 0b11111100		; For 10-bit readouts
-	rcall Facc			; Accumulate the result into temp registers
+	push arg0
 
 	; Configure DS18
 	rcall OWresetpulse
 	brts Fallback			; If no response, fall back to AVR sensor
 
-	ldi tmpl, 0xCC			; Send "Skip ROM" (we expect only one 1w device)	
+	ldi arg0, 0xCC			; Send "Skip ROM" (we expect only one 1w device)	
 	rcall OWsendbyte
-	ldi tmpl, 0x4E			; Send "Write Scratchpad" (the third byte is config)	
+	ldi arg0, 0x4E			; Send "Write Scratchpad" (the third byte is config)	
 	rcall OWsendbyte
-	ldi tmpl, 0x00			; Send two dummy bytes	
+	;ldi arg0, 0x00			; Send two dummy bytes	
 	rcall OWsendbyte
+	;ldi arg0, 0x00			; Send two dummy bytes	
 	rcall OWsendbyte
-	ldi tmpl, 0x3F			; Configuration byte 0x3F (10-bit result, conv. time 187.5ms)
+	ldi arg0, 0x3F			; Configuration byte 0x3F (10-bit result, conv. time 187.5ms)
 	rcall OWsendbyte
 
 	; Launch DS18 conversion
 	rcall OWresetpulse
 	brts Fallback			; If no response, fall back to AVR sensor
 	
-	ldi tmpl, 0xCC			; Send "Skip ROM" (we expect only one 1w device)	
+	ldi arg0, 0xCC			; Send "Skip ROM" (we expect only one 1w device)	
 	rcall OWsendbyte
-	ldi tmpl, 0x44			; Send "Convert Temperature"
+	ldi arg0, 0x44			; Send "Convert Temperature"
 	rcall OWsendbyte
 
 	; We assume the conversion should be complete at the next 5Hz cycle
 
+	pop arg1
+	pop arg0
+	;andi arg1, 0b11111111		; Sanitizing raw data from DS18B20 stored in tmp
+	andi arg0, 0b11111100		; For 10-bit readouts
+	rcall Facc			; Accumulate the result into temp registers
 	rcall PWMset			; Compute and update PWM setting
 	reti
 
@@ -312,11 +287,13 @@ Fallback:				; Read AVR temperature sensor instead
 ; ------------------------------------------------------------------------------
 
 PWMset:					; Compute and update PWM setting
-					; Destroys tmp
 	; TCA period is 2499 ticks
 	; Input value is within 0-319 range
 	; let's set CMP = 579 + (6*IN)
 	; This gives 23.16% minimum PWM
+
+	push tmpl
+	push tmph
 
 	cp  templ, tempminl		; Check if temperature below the low threshold
 	cpc temph, tempminh
@@ -334,9 +311,9 @@ PWMset:					; Compute and update PWM setting
 	rjmp pwmfinal
 
 	pwm2:				; The "linear region"
-	; temp is at most 9 bits long
-	; slope fits into 7 bits
-	; The result is 16 bits long tops
+	; tmp is at most 9 bits long (0-319)
+	; slope fits into 6 bits (6 - 6*8)
+	; The result is 15 bits long
 	movw tmpl, templ		; Calculate the difference against the tempmin
 	sub tmpl, tempminl
 	sbc tmph, tempminh
@@ -354,82 +331,90 @@ PWMset:					; Compute and update PWM setting
 	sts TCA0_SINGLE_CMP1BUFH, tmph
 	ldi tmpl, 0x04			; Apply CMP1BUF
 	sts TCA0_SINGLE_CTRLFSET, tmpl
+
+	pop tmph
+	pop tmpl
 	ret
 
 ; ------------------------------------------------------------------------------
 
 AVRtemp:				; Capture temperature from the AVR internal sensor
-
+					; Returns it to arg[1:0]
 	rcall ADCpoll			
+	push tmpl
+	push tmph
 
-	lds tmpl, ADC0_RESH		; Load ADC results, reversed reg order for a reason
-	lds tmph, ADC0_RESL
-	ldi tmp2h, 0x40			; Dividing by 64 with appropriate rounding
-	add tmph, tmp2h			; Because 64x accumulation has been enabled
-	adc tmpl, zero
-	rol tmph			; Rotate both registers, 2 positions 
-	rol tmpl
-	rol tmph
-	rol tmpl
-	rol tmph
-	andi tmph, 0x03
+	lds arg0, ADC0_RESH		; Load ADC results, reversed reg order for a reason
+	lds arg1, ADC0_RESL
+	ldi tmpl, 0x40			; Dividing by 64 with appropriate rounding
+	add arg1, tmpl			; Because 64x accumulation has been enabled
+	adc arg0, zero
+	rol arg1			; Rotate both registers, 2 positions 
+	rol arg0
+	rol arg1
+	rol arg0
+	rol arg1
+	andi arg1, 0x03
 
 	; Temperature readout compensation, as per datasheet instructions
 	; However it's not clear whether the expected input value is 8 or 10 bit
 	; Assuming 10 bit for now
 
-	lds tmp2l, SIGROW_TEMPSENSE1	; Read offset
-	clr tmp2h			; expanding signed tmp2l to tmp2h:tmp2l
-	sbrc tmp2l, 7
-	ser tmp2h
-	sub tmpl, tmp2l			; Applying offset
-	sbc tmph, tmp2h
+	lds tmpl, SIGROW_TEMPSENSE1	; Read offset
+	clr tmph			; expanding signed tmpl to tmph:tmpl
+	sbrc tmpl, 7
+	ser tmph
+	sub arg0, tmpl			; Applying offset
+	sbc arg1, tmph
 
-	adiw tmpl, 0x08			; Dividing by 16 with appropriate rounding
-	;add tmpl, tmp2h
-	;adc tmph, zero			; WTF is this?
-	lsr tmph
-	ror tmpl
-	lsr tmph
-	ror tmpl
-	lsr tmph
-	ror tmpl
-	lsr tmph
-	ror tmpl
+	lds tmpl, SIGROW_TEMPSENSE0	; Read slope
+	mul tmpl, arg1			; Multiply the HS half of arg
+	movw arg0, r0
+	mul tmpl, arg0			; Multiplying the LS half
+	add arg0, r1			; Add LS to the final result (assuming no overflow)
+	adc arg1, zero
 
-	lds tmp2l, SIGROW_TEMPSENSE0	; Read slope
-	mul tmp2l, tmph			; Multiply MS half of tmp
-	push r0				; Stash the result (we assume r1 = 0)
-	mul tmp2l, tmpl			; Multiplying the LS half
-	movw tmpl, r0
-	pop r0				; Restore the MS multiplication
-	add temph, r0			; Add LS to the final result (assuming no overflow)
+					; Shift data into a proper position (<<4)
+	rol r0
+	rol arg0
+	rol arg1
+	rol r0
+	rol arg0
+	rol arg1
+	rol r0
+	rol arg0
+	rol arg1
+	rol r0
+	rol arg0
+	rol arg1
 
-	; At this point, temph:templ contains a temperature in Kelvins. 
+	; At this point, arg1:arg0 contains temperature in Kelvins. 
 	; The maximum value is 2^12 K, so no overflow is expected
 	; No negative values are expected either because physics.
 
-	subi tmpl, 0b00010010		; Converting to deg C
-	sbci tmph, 0b00010001
+	subi arg0, 0b00010010		; Converting to deg C
+	sbci arg1, 0b00010001
+	
+	pop tmph
+	pop tmpl
 
 	ret
 
 ; ------------------------------------------------------------------------------
 
-Facc:					; Filtered accumulation of tmp in temp
-					; Performs temp = (3/4)*temp + (1/4)*tmp
-					; Destroys tmp data
+Facc:					; Filtered accumulation of arg in temp
+					; Performs temp = (3/4)*temp + (1/4)*arg[1:0]
 
-	sub tmpl, templ			; tmp -= temp;
-	sbc tmph, temph
+	sub arg0, templ			; tmp -= temp;
+	sbc arg1, temph
 
-	adiw tmpl, 0x02			; Correct division rounding error
-	asr tmph			; tmp /= 4; (Preserving the sign)
-	ror tmpl
-	asr tmph
-	ror tmpl
-	add templ, tmpl			; temp += tmp
-	adc temph, tmph
+	adiw arg0, 0x02			; Correct division rounding error
+	asr arg1			; tmp /= 4; (Preserving the sign)
+	ror arg0
+	asr arg1
+	ror arg0
+	add templ, arg0			; temp += tmp
+	adc temph, arg1
 	ret
 
 ; ------------------------------------------------------------------------------
@@ -447,47 +432,47 @@ ADCpoll:				; Wait for the ADC conversion to complete
 
 ; ------------------------------------------------------------------------------
 
-OWsendbyte:				; Sends tmpl byte
-	push tmph
-	ldi tmph, 8
+OWsendbyte:				; Sends arg0 byte
+	push tmpl
+	ldi tmpl, 8
 	owz
 	owl
 	owsbloop:
 	owe
-	sbrc tmpl, 0			; Zero is the 60+us pull
+	sbrc arg0, 0			; Zero is the 60+us pull
 	owz				; Skip shortening the pull if zero
 	wait60u
 	owz
-	lsr tmpl			; Shift data right
-	dec tmph			
+	lsr arg0			; Shift data right
+	dec tmpl			
 	brne owsbloop			; Loop it
-	pop tmph
+	pop tmpl
 	ret
 
 ; ------------------------------------------------------------------------------
 
-OWreadbyte:				; Reads a byte to tmpl
-	push tmph
-	ldi tmph, 8
+OWreadbyte:				; Reads a byte to arg0
+	push tmpl
+	ldi tmpl, 8
 	owz
 	owl
 	owrbloop:
 	owe				; Pull low for 2us (>1us)
-	lsl tmpl			; shift register 
+	lsl arg0			; shift register 
 	owz
 	wait12u
 	owr
-	bld tmpl, 0			; Store received bit in tmpl
+	bld arg0, 0			; Store received bit in arg0
 	wait60u
-	dec tmph			
+	dec tmpl			
 	brne owrbloop			; Loop it
-	pop tmph
+	pop tmpl
 	ret
 
 ; ------------------------------------------------------------------------------
 
 OWresetpulse:				; Sends a reset pulse
-	owl				; returns "1" in T register if no response
+	owl				; returns "1" in T flag if no response
 	owe
 	wait480u
 	wait15u
@@ -502,10 +487,10 @@ OWresetpulse:				; Sends a reset pulse
 ; ------------------------------------------------------------------------------
 
 ; Delay loop used by the delay macros
-; including rcall, it wastes (tmpl*3)+5 cycles
-; tmpl > 0!
+; including rcall, it wastes (arg0*3)+5 cycles
+; arg0 > 0!
 delay:
-	dec tmpl		; 1 cycle
+	dec arg0		; 1 cycle
 	brne delay		; 2 cycles (1 if not true)
 	ret			; 4 cycles
 
