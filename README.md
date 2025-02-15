@@ -33,7 +33,7 @@ The aim of the project is to develop a fan controller module that can be applied
 - Configurable Maximum temperature (MT) and Temperature ramp length (TR)
   -   Fan stays off at T < (MT - TR)
   -   Fan's PWM is mapped to (25% - 100%) range within (MT-TR) < T < MT range
-  -   Fan stays fully on for T > MT
+  -   Fan stays fully on at T > MT
 
 
 ## Schematic
@@ -65,7 +65,7 @@ The temperature range that is mapped linearly to 25% - 100% PWM output This para
 
 | Ramp Length | Rtr value   |
 | ----------- | ----------- |
-| 5C          | Open        |
-| 10C         | 33k         |
-| 15C         | 12k         |
+| 2.5C        | Open        |
+| 5C          | 33k         |
+| 10C         | 12k         |
 | 20C         | 2k7 or less |
