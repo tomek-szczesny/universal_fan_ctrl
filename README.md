@@ -2,7 +2,7 @@
 
 An autonomous, temperature dependent fan controller
 
-The aim of the project is to develop a fan controller module that can be applied to fans in existing appliances that otherwise have no speed control. The module is intended to be connected as a pass-through between the fan and whatever it was originally plugged into.
+The aim of the project is to develop a fan controller module that can be applied to fans in existing appliances that otherwise have no speed control. The module is intended to be connected as a pass-through between the fan and its original power source.
 
 ![2025-02-15-212940_507x466_scrot](https://github.com/user-attachments/assets/fdbef686-8e25-4c24-93b2-18126f05e1e9)
 ![2025-02-15-212955_443x396_scrot](https://github.com/user-attachments/assets/53955208-b904-4a1b-bdb2-2d52df2c16a6)
